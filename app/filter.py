@@ -160,6 +160,7 @@ class Filter:
         self.soup = soup
         self.main_divs = self.soup.find('div', {'id': 'main'})
         self.remove_ads()
+        self.remove_ai_overview()
         self.remove_block_titles()
         self.remove_block_url()
         self.collapse_sections()
@@ -322,6 +323,48 @@ class Filter:
         for result in selected:
             result.string.replace_with(result.string.replace(
                                        search_string, ''))
+
+    def remove_ai_overview(self) -> None:
+        """Removes Google's AI Overview/SGE results from search results
+
+        Returns:
+            None (The soup object is modified directly)
+        """
+        if not self.main_divs:
+            return
+
+        # Patterns that identify AI Overview sections
+        ai_patterns = [
+            'AI Overview',
+            'AI responses may include mistakes',
+        ]
+
+        # Result div classes - check both original Google classes and mapped ones
+        # since this runs before CSS class replacement
+        result_classes = [GClasses.result_class_a]  # 'ZINbbc'
+        result_classes.extend(GClasses.result_classes.get(
+            GClasses.result_class_a, []))  # ['Gx5Zad']
+
+        # Collect divs to remove first to avoid modifying while iterating
+        divs_to_remove = []
+
+        for div in self.main_divs.find_all('div', recursive=True):
+            # Check if this div or its children contain AI Overview markers
+            div_text = div.get_text()
+            if any(pattern in div_text for pattern in ai_patterns):
+                # Walk up to find the top-level result div
+                parent = div
+                while parent:
+                    p_cls = parent.attrs.get('class') or []
+                    if any(rc in p_cls for rc in result_classes):
+                        if parent not in divs_to_remove:
+                            divs_to_remove.append(parent)
+                        break
+                    parent = parent.parent
+
+        # Remove collected divs
+        for div in divs_to_remove:
+            div.decompose()
 
     def remove_ads(self) -> None:
         """Removes ads found in the list of search result divs
