@@ -40,8 +40,9 @@ Contents
     1. [Arch/AUR](#arch-linux--arch-based-distributions)
     1. [Helm/Kubernetes](#helm-chart-for-kubernetes)
 4. [Environment Variables and Configuration](#environment-variables)
-5. [Usage](#usage)
-6. [Extra Steps](#extra-steps)
+5. [Google Custom Search (BYOK)](#google-custom-search-byok)
+6. [Usage](#usage)
+7. [Extra Steps](#extra-steps)
     1. [Set Primary Search Engine](#set-whoogle-as-your-primary-search-engine)
 	2. [Custom Redirecting](#custom-redirecting)
 	2. [Custom Bangs](#custom-bangs)
@@ -50,10 +51,10 @@ Contents
     5. [Using with Firefox Containers](#using-with-firefox-containers)
     6. [Reverse Proxying](#reverse-proxying)
         1. [Nginx](#nginx)
-7. [Contributing](#contributing)
-8. [FAQ](#faq)
-9. [Public Instances](#public-instances)
-10. [Screenshots](#screenshots)
+8. [Contributing](#contributing)
+9. [FAQ](#faq)
+10. [Public Instances](#public-instances)
+11. [Screenshots](#screenshots)
 
 ## Features
 - No ads or sponsored content
@@ -475,7 +476,6 @@ There are a few optional environment variables available for customizing a Whoog
 | WHOOGLE_AUTOCOMPLETE | Controls visibility of autocomplete/search suggestions. Default on -- use '0' to disable. |
 | WHOOGLE_MINIMAL      | Remove everything except basic result cards from all search queries.                      |
 | WHOOGLE_CSP          | Sets a default set of 'Content-Security-Policy' headers                                   |
-| WHOOGLE_RESULTS_PER_PAGE          | Set the number of results per page                                           |
 | WHOOGLE_TOR_SERVICE  | Enable/disable the Tor service on startup. Default on -- use '0' to disable.              |
 | WHOOGLE_TOR_USE_PASS | Use password authentication for tor control port. |
 | WHOOGLE_TOR_CONF | The absolute path to the config file containing the password for the tor control port. Default: ./misc/tor/control.conf WHOOGLE_TOR_PASS must be 1 for this to work.|
@@ -511,6 +511,103 @@ These environment variables allow setting default config values, but can be over
 | WHOOGLE_CONFIG_PREFERENCES_KEY       | Key to encrypt preferences in URL (REQUIRED to show url)        |
 | WHOOGLE_CONFIG_ANON_VIEW             | Include the "anonymous view" option for each search result      |
 | WHOOGLE_CONFIG_SHOW_USER_AGENT       | Display the User Agent string used for search in results footer |
+
+### Google Custom Search (BYOK) Environment Variables
+
+These environment variables configure the "Bring Your Own Key" feature for Google Custom Search API:
+
+| Variable             | Description                                                                               |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| WHOOGLE_CSE_API_KEY  | Your Google API key with Custom Search API enabled                                        |
+| WHOOGLE_CSE_ID       | Your Custom Search Engine ID (cx parameter)                                               |
+| WHOOGLE_USE_CSE      | Enable Custom Search API by default (set to '1' to enable)                                |
+
+## Google Custom Search (BYOK)
+
+If Google blocks traditional search scraping (captchas, IP bans), you can use your own Google Custom Search Engine credentials as a fallback. This uses Google's official API with your own quota.
+
+### Why Use This?
+
+- **Reliability**: Official API never gets blocked or rate-limited (within quota)
+- **Speed**: Direct JSON responses are faster than HTML scraping
+- **Fallback**: Works when all scraping workarounds fail
+- **Privacy**: Your searches still don't go through third parties—they go directly to Google with your own API key
+
+### Limitations vs Standard Whoogle
+
+| Feature          | Standard Scraping        | CSE API             |
+|------------------|--------------------------|---------------------|
+| Daily limit      | None (until blocked)     | 100 free, then paid |
+| Image search     | ✅ Full support          | ✅ Supported         |
+| News/Videos tabs | ✅                       | ❌ Web results only  |
+| Speed            | Slower (HTML parsing)    | Faster (JSON)       |
+| Reliability      | Can be blocked           | Always works        |
+
+### Setup Steps
+
+#### 1. Create a Custom Search Engine
+1. Go to [Programmable Search Engine](https://programmablesearchengine.google.com/controlpanel/all)
+2. Click **"Add"** to create a new search engine
+3. Under "What to search?", select **"Search the entire web"**
+4. Give it a name (e.g., "My Whoogle CSE")
+5. Click **"Create"**
+6. Copy your **Search Engine ID** 
+
+#### 2. Get an API Key
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select an existing one
+3. Go to **APIs & Services** → **Library**
+4. Search for **"Custom Search API"** and click **Enable**
+5. Go to **APIs & Services** → **Credentials**
+6. Click **"Create Credentials"** → **"API Key"**
+7. Copy your API key (looks like `AIza...`)
+
+#### 3. (Recommended) Restrict Your API Key
+To prevent misuse if your key is exposed:
+1. Click on your API key in Credentials
+2. Under **"API restrictions"**, select **"Restrict key"**
+3. Choose only **"Custom Search API"**
+4. Under **"Application restrictions"**, consider adding IP restrictions if using on a server
+5. Click **Save**
+
+#### 4. Configure Whoogle
+
+**Option A: Via Settings UI**
+1. Open your Whoogle instance
+2. Click the **Config** button
+3. Scroll to "Google Custom Search (BYOK)" section
+4. Enter your API Key and CSE ID
+5. Check "Use Custom Search API"
+6. Click **Apply**
+
+**Option B: Via Environment Variables**
+```bash
+WHOOGLE_CSE_API_KEY=AIza...
+WHOOGLE_CSE_ID=23f...
+WHOOGLE_USE_CSE=1
+```
+
+### Pricing & Avoiding Charges
+
+| Tier | Queries          | Cost                  |
+|------|------------------|-----------------------|
+| Free | 100/day          | $0                    |
+| Paid | Up to 10,000/day | $5 per 1,000 queries  |
+
+**⚠️ To avoid unexpected charges:**
+
+1. **Don't add a payment method** to Google Cloud (safest option—API stops at 100/day)
+2. **Set a billing budget alert**: [Billing → Budgets & Alerts](https://console.cloud.google.com/billing/budgets)
+3. **Cap API usage**: APIs & Services → Custom Search API → Quotas → Set "Queries per day" to 100
+4. **Monitor usage**: APIs & Services → Custom Search API → Metrics
+
+### Troubleshooting
+
+| Error               | Cause                     | Solution                                                        |
+|---------------------|---------------------------|-----------------------------------------------------------------|
+| "API key not valid" | Invalid or restricted key | Check key in Cloud Console, ensure Custom Search API is enabled |
+| "Quota exceeded"    | Hit 100/day limit         | Wait until midnight PT, or enable billing                       |
+| "Invalid CSE ID"    | Wrong cx parameter        | Copy ID from Programmable Search Engine control panel           |
 
 ## Usage
 Same as most search engines, with the exception of filtering by time range.

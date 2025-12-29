@@ -257,6 +257,30 @@
                             <input type="checkbox" name="show_user_agent"
                                    id="config-show-user-agent" {{ 'checked' if config.show_user_agent else '' }}>
                         </div>
+                        <!-- Google Custom Search Engine (BYOK) Settings -->
+                        <div class="config-div config-div-cse-header" style="margin-top: 20px; border-top: 1px solid var(--result-bg); padding-top: 15px;">
+                            <strong>Google Custom Search (BYOK)</strong>
+                            <div><span class="info-text"> — <a href="https://github.com/benbusby/whoogle-search#google-custom-search-byok">Setup Guide</a></span></div>
+                        </div>
+                        <div class="config-div config-div-use-cse">
+                            <label for="config-use-cse">Use Custom Search API: </label>
+                            <input type="checkbox" name="use_cse" id="config-use-cse" {{ 'checked' if config.use_cse else '' }}>
+                            <div><span class="info-text"> — Enable to use your own Google API key (100 free queries/day)</span></div>
+                        </div>
+                        <div class="config-div config-div-cse-api-key">
+                            <label for="config-cse-api-key">CSE API Key: </label>
+                            <input type="password" name="cse_api_key" id="config-cse-api-key"
+                                   value="{{ config.cse_api_key }}"
+                                   placeholder="AIza..."
+                                   autocomplete="off">
+                        </div>
+                        <div class="config-div config-div-cse-id">
+                            <label for="config-cse-id">CSE ID: </label>
+                            <input type="text" name="cse_id" id="config-cse-id"
+                                   value="{{ config.cse_id }}"
+                                   placeholder="abc123..."
+                                   autocomplete="off">
+                        </div>
                         <div class="config-div config-div-root-url">
                             <label for="config-url">{{ translation['config-url'] }}: </label>
                             <input type="text" name="url" id="config-url" value="{{ config.url }}">

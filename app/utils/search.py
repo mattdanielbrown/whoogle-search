@@ -5,6 +5,7 @@ from app.filter import Filter
 from app.request import gen_query
 from app.utils.misc import get_proxy_host_url
 from app.utils.results import get_first_link
+from app.services.cse_client import CSEClient, cse_results_to_html
 from bs4 import BeautifulSoup as bsoup
 from cryptography.fernet import Fernet, InvalidToken
 from flask import g
@@ -140,7 +141,91 @@ class Search:
                                 root_url=root_url,
                                 mobile=mobile,
                                 config=self.config,
-                                query=self.query)
+                                query=self.query,
+                                page_url=self.request.url)
+        
+        # Check if CSE (Custom Search Engine) should be used
+        use_cse = (
+            self.config.use_cse and 
+            self.config.cse_api_key and 
+            self.config.cse_id
+        )
+        
+        if use_cse:
+            # Use Google Custom Search API
+            return self._generate_cse_response(content_filter, root_url, mobile)
+        
+        # Default: Use traditional scraping method
+        return self._generate_scrape_response(content_filter, root_url, mobile)
+    
+    def _generate_cse_response(self, content_filter: Filter, root_url: str, mobile: bool) -> str:
+        """Generate response using Google Custom Search API
+        
+        Args:
+            content_filter: Filter instance for processing results
+            root_url: Root URL of the instance
+            mobile: Whether this is a mobile request
+            
+        Returns:
+            str: HTML response string
+        """
+        # Get pagination start index from request params
+        start = int(self.request_params.get('start', 1))
+        
+        # Determine safe search setting
+        safe = 'high' if self.config.safe else 'off'
+        
+        # Determine search type (web or image)
+        # tbm=isch or udm=2 indicates image search
+        search_type = ''
+        if self.search_type == 'isch' or self.request_params.get('udm') == '2':
+            search_type = 'image'
+        
+        # Create CSE client and perform search
+        with CSEClient(
+            api_key=self.config.cse_api_key,
+            cse_id=self.config.cse_id
+        ) as client:
+            response = client.search(
+                query=self.query,
+                start=start,
+                safe=safe,
+                language=self.config.lang_search,
+                country=self.config.country,
+                search_type=search_type
+            )
+        
+        # Convert CSE response to HTML
+        html_content = cse_results_to_html(response, self.query)
+        
+        # Store full query for tabs
+        self.full_query = self.query
+        
+        # Parse and filter the HTML
+        html_soup = bsoup(html_content, 'html.parser')
+        
+        # Handle feeling lucky
+        if self.feeling_lucky:
+            if response.has_results and response.results:
+                return response.results[0].link
+            self.feeling_lucky = False
+        
+        # Apply content filter (encrypts links, applies CSS, etc.)
+        formatted_results = content_filter.clean(html_soup)
+        
+        return str(formatted_results)
+    
+    def _generate_scrape_response(self, content_filter: Filter, root_url: str, mobile: bool) -> str:
+        """Generate response using traditional HTML scraping
+        
+        Args:
+            content_filter: Filter instance for processing results
+            root_url: Root URL of the instance
+            mobile: Whether this is a mobile request
+            
+        Returns:
+            str: HTML response string
+        """
         full_query = gen_query(self.query,
                                self.request_params,
                                self.config)
@@ -148,8 +233,10 @@ class Search:
 
         # force mobile search when view image is true and
         # the request is not already made by a mobile
-        view_image = ('tbm=isch' in full_query
-                      and self.config.view_image)
+        is_image_query = ('tbm=isch' in full_query) or ('udm=2' in full_query)
+        # Always parse image results when hitting the images endpoint (udm=2)
+        # to avoid Google returning only text/AI blocks.
+        view_image = is_image_query
 
         client = self.user_request or g.user_request
         get_body = client.send(query=full_query,
@@ -194,4 +281,3 @@ class Search:
             link['href'] += param_str
 
         return str(formatted_results)
-

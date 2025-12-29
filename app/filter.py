@@ -5,7 +5,8 @@ from cryptography.fernet import Fernet
 from flask import render_template
 import html
 import urllib.parse as urlparse
-from urllib.parse import parse_qs
+import os
+from urllib.parse import parse_qs, urlencode, urlunparse
 import re
 
 from app.models.g_classes import GClasses
@@ -111,8 +112,10 @@ def clean_css(css: str, page_url: str) -> str:
 
 
 class Filter:
-    # Limit used for determining if a result is a "regular" result or a list
-    # type result (such as "people also asked", "related searches", etc)
+    # Minimum number of child div elements that indicates a collapsible section
+    # Regular search results typically have fewer child divs (< 7)
+    # Special sections like "People also ask", "Related searches" have more (>= 7)
+    # This threshold helps identify and collapse these extended result sections
     RESULT_CHILD_LIMIT = 7
 
     def __init__(
@@ -157,6 +160,7 @@ class Filter:
         self.soup = soup
         self.main_divs = self.soup.find('div', {'id': 'main'})
         self.remove_ads()
+        self.remove_ai_overview()
         self.remove_block_titles()
         self.remove_block_url()
         self.collapse_sections()
@@ -206,6 +210,9 @@ class Filter:
         header = self.soup.find('header')
         if header:
             header.decompose()
+        # Remove broken "Dark theme" toggle snippets that occasionally slip
+        # into the footer.
+        self.remove_dark_theme_toggle(self.soup)
         self.remove_site_blocks(self.soup)
         return self.soup
 
@@ -215,7 +222,7 @@ class Filter:
         Returns:
             None (The soup object is modified directly)
         """
-        if not div:
+        if not div or not isinstance(div, Tag):
             return
 
         for d in div.find_all('div', recursive=True):
@@ -290,6 +297,22 @@ class Filter:
             if GClasses.result_class_a in p_cls:
                 break
 
+    def remove_dark_theme_toggle(self, soup: BeautifulSoup) -> None:
+        """Removes stray Dark theme toggle/link fragments that can appear
+        in the footer."""
+        for node in soup.find_all(string=re.compile(r'Dark theme', re.I)):
+            try:
+                parent = node.find_parent(
+                    lambda tag: tag.name in ['div', 'span', 'p', 'a', 'li',
+                                             'section'])
+                target = parent or node.parent
+                if target:
+                    target.decompose()
+                else:
+                    node.extract()
+            except Exception:
+                continue
+
     def remove_site_blocks(self, soup) -> None:
         if not self.config.block or not soup.body:
             return
@@ -300,6 +323,48 @@ class Filter:
         for result in selected:
             result.string.replace_with(result.string.replace(
                                        search_string, ''))
+
+    def remove_ai_overview(self) -> None:
+        """Removes Google's AI Overview/SGE results from search results
+
+        Returns:
+            None (The soup object is modified directly)
+        """
+        if not self.main_divs:
+            return
+
+        # Patterns that identify AI Overview sections
+        ai_patterns = [
+            'AI Overview',
+            'AI responses may include mistakes',
+        ]
+
+        # Result div classes - check both original Google classes and mapped ones
+        # since this runs before CSS class replacement
+        result_classes = [GClasses.result_class_a]  # 'ZINbbc'
+        result_classes.extend(GClasses.result_classes.get(
+            GClasses.result_class_a, []))  # ['Gx5Zad']
+
+        # Collect divs to remove first to avoid modifying while iterating
+        divs_to_remove = []
+
+        for div in self.main_divs.find_all('div', recursive=True):
+            # Check if this div or its children contain AI Overview markers
+            div_text = div.get_text()
+            if any(pattern in div_text for pattern in ai_patterns):
+                # Walk up to find the top-level result div
+                parent = div
+                while parent:
+                    p_cls = parent.attrs.get('class') or []
+                    if any(rc in p_cls for rc in result_classes):
+                        if parent not in divs_to_remove:
+                            divs_to_remove.append(parent)
+                        break
+                    parent = parent.parent
+
+        # Remove collected divs
+        for div in divs_to_remove:
+            div.decompose()
 
     def remove_ads(self) -> None:
         """Removes ads found in the list of search result divs
@@ -370,6 +435,11 @@ class Filter:
                 return []
 
         if not self.main_divs:
+            return
+
+        # Skip collapsing for CSE (Custom Search Engine) results
+        # CSE results have a data-cse attribute on the main container
+        if self.soup.find(attrs={'data-cse': 'true'}):
             return
 
         # Loop through results and check for the number of child divs in each
@@ -529,9 +599,31 @@ class Filter:
             )
             css = f"{css_html_tag}{css}"
             css = re.sub('body{(.*?)}',
-                         'body{padding:0 8px;margin:0 auto;max-width:736px;}',
+                         'body{padding:0 12px;margin:0 auto;max-width:1200px;}',
                          css)
             style.string = css
+
+        # Normalize the max width between result types so the page doesn't
+        # jump in size when switching tabs.
+        if not self.mobile:
+            max_width_css = (
+                'body, #cnt, #center_col, .main, .e9EfHf, #searchform, '
+                '.GyAeWb, .s6JM6d {'
+                'max-width:1200px;'
+                'margin:0 auto;'
+                'padding-left:12px;'
+                'padding-right:12px;'
+                '}'
+            )
+            # Build the style tag using a fresh soup to avoid cases where the
+            # current soup lacks the helper methods (e.g., non-root elements).
+            factory_soup = BeautifulSoup('', 'html.parser')
+            extra_style = factory_soup.new_tag('style')
+            extra_style.string = max_width_css
+            if self.soup.head:
+                self.soup.head.append(extra_style)
+            else:
+                self.soup.insert(0, extra_style)
 
     def update_link(self, link: Tag) -> None:
         """Update internal link paths with encrypted path, otherwise remove
@@ -552,9 +644,6 @@ class Filter:
 
         # Remove any elements that direct to unsupported Google pages
         if any(url in link_netloc for url in unsupported_g_pages):
-            # FIXME: The "Shopping" tab requires further filtering (see #136)
-            # Temporarily removing all links to that tab for now.
-
             # Replaces the /url google unsupported link to the direct url
             link['href'] = link_netloc
             parent = link.parent
@@ -739,15 +828,112 @@ class Filter:
             desc_node.replace_with(new_desc)
 
     def view_image(self, soup) -> BeautifulSoup:
-        """Replaces the soup with a new one that handles mobile results and
-        adds the link of the image full res to the results.
+        """Parses image results from Google Images and rewrites them into the
+        lightweight Whoogle image results template.
 
-        Args:
-            soup: A BeautifulSoup object containing the image mobile results.
-
-        Returns:
-            BeautifulSoup: The new BeautifulSoup object
+        Google now serves image results via the modern udm=2 endpoint, where
+        the raw HTML contains only placeholder thumbnails. The actual image
+        URLs live inside serialized data blobs in script tags. We extract that
+        data and pair it with the visible result cards.
         """
+
+        def _decode_url(url: str) -> str:
+            if not url:
+                return ''
+            # Decode common escaped characters found in the script blobs
+            return html.unescape(
+                url.replace('\\u003d', '=').replace('\\u0026', '&')
+            )
+
+        def _extract_image_data(modern_soup: BeautifulSoup) -> dict:
+            """Extracts docid -> {img_url, img_tbn} from serialized scripts."""
+            scripts_text = ' '.join(
+                script.string for script in modern_soup.find_all('script')
+                if script.string
+            )
+            pattern = re.compile(
+                r'\[0,"(?P<docid>[^"]+)",\["(?P<thumb>https://encrypted-tbn[^"]+)"'
+                r'(?:,\d+,\d+)?\],\["(?P<full>https?://[^"]+?)"'
+                r'(?:,\d+,\d+)?\]',
+                re.DOTALL
+            )
+            results_map = {}
+            for match in pattern.finditer(scripts_text):
+                docid = match.group('docid')
+                thumb = _decode_url(match.group('thumb'))
+                full = _decode_url(match.group('full'))
+                results_map[docid] = {
+                    'img_tbn': thumb,
+                    'img_url': full
+                }
+            return results_map
+
+        def _parse_modern_results(modern_soup: BeautifulSoup) -> list:
+            cards = modern_soup.find_all(
+                'div',
+                attrs={
+                    'data-attrid': 'images universal',
+                    'data-docid': True
+                }
+            )
+            if not cards:
+                return []
+
+            meta_map = _extract_image_data(modern_soup)
+            parsed = []
+            seen = set()
+
+            for card in cards:
+                docid = card.get('data-docid')
+                meta = meta_map.get(docid, {})
+                img_url = meta.get('img_url')
+                img_tbn = meta.get('img_tbn')
+
+                # Fall back to the inline src if we failed to map the docid
+                if not img_tbn:
+                    img_tag = card.find('img')
+                    if img_tag:
+                        candidate_src = img_tag.get('src')
+                        if candidate_src and candidate_src.startswith('http'):
+                            img_tbn = candidate_src
+
+                web_page = card.get('data-lpage') or ''
+                if not web_page:
+                    link = card.find('a', href=True)
+                    if link:
+                        web_page = link['href']
+
+                key = (img_url, img_tbn, web_page)
+                if not any(key) or key in seen:
+                    continue
+                seen.add(key)
+
+                parsed.append({
+                    'domain': urlparse.urlparse(web_page).netloc
+                    if web_page else '',
+                    'img_url': img_url or img_tbn or '',
+                    'web_page': web_page,
+                    'img_tbn': img_tbn or img_url or ''
+                })
+            return parsed
+
+        # Try parsing the modern (udm=2) layout first
+        modern_results = _parse_modern_results(soup)
+        if modern_results:
+            # TODO: Implement proper image pagination. Google images uses
+            # infinite scroll with `ijn` offsets; we need a clean,
+            # de-duplicated pagination strategy before exposing a Next link.
+            next_link = None
+            return BeautifulSoup(
+                render_template(
+                    'imageresults.html',
+                    length=len(modern_results),
+                    results=modern_results,
+                    view_label="View Image",
+                    next_link=next_link
+                ),
+                features='html.parser'
+            )
 
         # get some tags that are unchanged between mobile and pc versions
         cor_suggested = soup.find_all('table', attrs={'class': "By0U9"})
@@ -762,7 +948,11 @@ class Filter:
             results_all = results_div.find_all('div', attrs={'class': "lIMUZd"})
 
         for item in results_all:
-            urls = item.find('a')['href'].split('&imgrefurl=')
+            link = item.find('a', href=True)
+            if not link:
+                continue
+
+            urls = link['href'].split('&imgrefurl=')
 
             # Skip urls that are not two-element lists
             if len(urls) != 2:
@@ -777,7 +967,16 @@ class Filter:
             except IndexError:
                 web_page = urlparse.unquote(urls[1])
 
-            img_tbn = urlparse.unquote(item.find('a').find('img')['src'])
+            img_tag = link.find('img')
+            if not img_tag:
+                continue
+
+            img_tbn = urlparse.unquote(
+                img_tag.get('src') or img_tag.get('data-src', '')
+            )
+
+            if not img_tbn:
+                continue
 
             results.append({
                 'domain': urlparse.urlparse(web_page).netloc,
@@ -794,11 +993,18 @@ class Filter:
 
         # replace correction suggested by google object if exists
         if len(cor_suggested):
-            soup.find_all(
+            suggested_tables = soup.find_all(
                 'table',
                 attrs={'class': "By0U9"}
-            )[0].replaceWith(cor_suggested[0])
-        # replace next page object at the bottom of the page
-        soup.find_all('table',
-                      attrs={'class': "uZgmoc"})[0].replaceWith(next_pages)
+            )
+            if suggested_tables:
+                suggested_tables[0].replaceWith(cor_suggested[0])
+
+        # replace next page object at the bottom of the page, when present
+        next_page_tables = soup.find_all('table', attrs={'class': "uZgmoc"})
+        if next_pages and next_page_tables:
+            next_page_tables[0].replaceWith(next_pages)
+
+        # TODO: Reintroduce pagination for legacy image layout if needed.
+
         return soup
