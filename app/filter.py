@@ -222,7 +222,7 @@ class Filter:
         Returns:
             None (The soup object is modified directly)
         """
-        if not div:
+        if not div or not isinstance(div, Tag):
             return
 
         for d in div.find_all('div', recursive=True):
@@ -435,6 +435,11 @@ class Filter:
                 return []
 
         if not self.main_divs:
+            return
+
+        # Skip collapsing for CSE (Custom Search Engine) results
+        # CSE results have a data-cse attribute on the main container
+        if self.soup.find(attrs={'data-cse': 'true'}):
             return
 
         # Loop through results and check for the number of child divs in each

@@ -216,18 +216,11 @@ class Request:
     """
 
     def __init__(self, normal_ua, root_path, config: Config, http_client=None):
-        results_per_page = str(os.getenv('WHOOGLE_RESULTS_PER_PAGE', 10))
-        self.search_url = (
-            'https://www.google.com/search?gbv=1&num='
-            f'{results_per_page}&q='
-        )
+        self.search_url = 'https://www.google.com/search?gbv=1&q='
         # Google Images rejects the lightweight gbv=1 interface. Use the
         # modern udm=2 entrypoint specifically for image searches to avoid the
         # "update your browser" interstitial.
-        self.image_search_url = (
-            'https://www.google.com/search?udm=2&num='
-            f'{results_per_page}&q='
-        )
+        self.image_search_url = 'https://www.google.com/search?udm=2&q='
         # Optionally send heartbeat to Tor to determine availability
         # Only when Tor is enabled in config to avoid unnecessary socket usage
         if config.tor:

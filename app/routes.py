@@ -17,6 +17,7 @@ from app import app
 from app.models.config import Config
 from app.models.endpoint import Endpoint
 from app.request import Request, TorError
+from app.services.cse_client import CSEException
 from app.utils.bangs import suggest_bang, resolve_bang
 from app.utils.misc import empty_gif, placeholder_img, get_proxy_host_url, \
     fetch_favicon
@@ -356,6 +357,30 @@ def search():
         session['config']['tor'] = False if e.disable else session['config'][
             'tor']
         return redirect(url_for('.index'))
+    except CSEException as e:
+        localization_lang = g.user_config.get_localization_lang()
+        translation = app.config['TRANSLATIONS'][localization_lang]
+        wants_json = (
+            request.args.get('format') == 'json' or
+            'application/json' in request.headers.get('Accept', '') or
+            'application/*+json' in request.headers.get('Accept', '')
+        )
+        error_msg = f"Custom Search API Error: {e.message}"
+        if e.is_quota_error:
+            error_msg = ("Google Custom Search API quota exceeded. "
+                        "Free tier allows 100 queries/day. "
+                        "Wait until midnight PT or disable CSE in settings.")
+        if wants_json:
+            return jsonify({
+                'error': True,
+                'error_message': error_msg,
+                'query': urlparse.unquote(query)
+            }), e.code
+        return render_template(
+            'error.html',
+            error_message=error_msg,
+            translation=translation,
+            config=g.user_config), e.code
 
     wants_json = (
         request.args.get('format') == 'json' or
@@ -424,6 +449,16 @@ def search():
                             search_util.search_type,
                             g.user_config.preferences,
                             translation)
+    
+    # Filter out unsupported tabs when CSE is enabled
+    # CSE only supports web (all) and image search, not videos/news
+    use_cse = (
+        g.user_config.use_cse and 
+        g.user_config.cse_api_key and 
+        g.user_config.cse_id
+    )
+    if use_cse:
+        tabs = {k: v for k, v in tabs.items() if k in ['all', 'images', 'maps']}
 
     # Feature to display currency_card
     # Since this is determined by more than just the
